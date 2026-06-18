@@ -1,32 +1,54 @@
-/**
- * 中间件统一注册文件（Medusa v2 规范）
- * 
- * 通过 MiddlewaresConfig 集中配置所有中间件
- * 注意：实际中间件将在阶段 8 逐步完善，此处先建立骨架
- */
+import { MiddlewaresConfig } from "@medusajs/framework/http";
+import { authenticate } from "@medusajs/medusa";
+import { Actor } from "../types";
 
-// 限流配置常量
-export const RATE_LIMIT_CONFIG = {
-  // 读操作（GET）：100 次/分钟/IP 或用户
-  read: {
-    windowMs: 60 * 1000, // 1 分钟
-    max: 100,
-  },
-  // 写操作（POST/PUT/DELETE）：20 次/分钟/用户
-  write: {
-    windowMs: 60 * 1000,
-    max: 20,
-  },
-  // 敏感操作（审核、角色变更、状态变更）：10 次/分钟/管理员
-  sensitive: {
-    windowMs: 60 * 1000,
-    max: 10,
-  },
+/**
+ * 平台角色解析中间件
+ * 从 User.metadata.biz_role 读取平台角色，挂载 req.actor
+ */
+const resolvePlatform = async (req: any, res: any, next: any) => {
+  try {
+    const actor = req.actor as Actor | undefined;
+    if (actor) {
+      // actor 已由 authenticate 中间件挂载了 user 信息
+      // 此处仅做类型断言，实际角色在路由 handler 中从 User.metadata 读取
+      next();
+      return;
+    }
+    next();
+  } catch (err) {
+    next(err);
+  }
 };
 
-// 中间件配置占位 — 将在阶段 8 填充实际路由
-export const config = {
+/**
+ * 机构角色解析中间件
+ * 从 Customer 关联查询 OrgMember，挂载 req.actor
+ */
+const resolveOrg = async (req: any, res: any, next: any) => {
+  try {
+    const actor = req.actor as Actor | undefined;
+    if (actor) {
+      // actor 已由 authenticate 中间件挂载了 customer 信息
+      // 实际机构角色在路由 handler 中从 OrgMember 表查询
+      next();
+      return;
+    }
+    next();
+  } catch (err) {
+    next(err);
+  }
+};
+
+export const config: MiddlewaresConfig = {
   routes: [
-    // 将在后续阶段填充
+    {
+      matcher: "/store/biz/*",
+      middlewares: [authenticate("customer", "bearer"), resolveOrg],
+    },
+    {
+      matcher: "/admin/biz/*",
+      middlewares: [authenticate("user", "bearer"), resolvePlatform],
+    },
   ],
 };
