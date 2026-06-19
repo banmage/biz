@@ -21,7 +21,7 @@ import bizAuditLog from "./modules/bizAuditLog";
 
 export const config: any = {
   name: "@your-org/medusa-plugin-biz",
-  version: "0.1.0",
+  version: "1.0.0",
   modules: [
     bizOrganization,
     bizOrgMember,
