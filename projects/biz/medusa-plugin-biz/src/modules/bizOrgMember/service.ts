@@ -1,11 +1,14 @@
-import { MedusaService } from "@medusajs/framework/utils";
-import { EntityManager } from "@mikro-orm/postgresql";
+import {
+  MedusaService,
+  InjectTransactionManager,
+  MedusaContext,
+} from "@medusajs/framework/utils";
+import { Context } from "@medusajs/framework/types";
 import { BizOrgMember } from "./models/org-member";
 import { BizError, BizErrorCode } from "../../lib/biz-error-codes";
 import { assertTransition, TransitionMap } from "../../lib/state-machine";
-import { successResponse, errorResponse } from "../../lib/response";
+import { successResponse } from "../../lib/response";
 import { parsePagination, paginatedResponse } from "../../lib/pagination";
-import { Actor } from "../../types";
 
 // 成员状态机
 const MEMBER_TRANSITIONS: TransitionMap = {
@@ -17,13 +20,6 @@ const MEMBER_TRANSITIONS: TransitionMap = {
 class OrgMemberService extends MedusaService({
   OrgMember: BizOrgMember,
 }) {
-  protected container: any;
-
-  constructor(container: any) {
-    super(container);
-    this.container = container;
-  }
-
   /**
    * 邀请成员
    * 若已存在 removed/left 记录，重置为 pending（不创建新记录）
@@ -34,45 +30,59 @@ class OrgMemberService extends MedusaService({
     role: "approver" | "maintainer" | "member",
     invitedBy: string
   ) {
-    const manager = this.container.resolve("manager") as EntityManager;
+    return await this.inviteMember_(organizationId, customerId, role, invitedBy);
+  }
+
+  @InjectTransactionManager()
+  protected async inviteMember_(
+    organizationId: string,
+    customerId: string,
+    role: "approver" | "maintainer" | "member",
+    invitedBy: string,
+    @MedusaContext() sharedContext?: Context
+  ) {
+    const manager = sharedContext!.transactionManager as any;
     const repo = manager.getRepository(BizOrgMember);
 
     // 检查是否已有记录（包括已移除/离开的）
-    const existing = await repo.findOne({
+    const existing = await repo.find({
       where: { organization_id: organizationId, customer_id: customerId },
     });
 
-    if (existing) {
-      if (existing.status === "active" || existing.status === "pending") {
+    if (existing.length > 0) {
+      const member = existing[0];
+      if (member.status === "active" || member.status === "pending") {
         throw new BizError(
           BizErrorCode.BIZ_ORG_MEMBER_ALREADY_EXISTS,
           "该成员已存在于机构中"
         );
       }
       // removed/left → 重置为 pending
-      existing.status = "pending";
-      existing.role = role;
-      existing.invited_by = invitedBy;
-      existing.invited_at = new Date();
-      existing.joined_at = null;
-      await repo.persistAndFlush(existing);
+      await repo.update([{
+        entity: member,
+        update: {
+          status: "pending",
+          role,
+          invited_by: invitedBy,
+          invited_at: new Date(),
+          joined_at: null,
+        },
+      }]);
 
       return successResponse(
-        { memberId: existing.id, status: "pending" },
+        { memberId: member.id, status: "pending" },
         "邀请已发送"
       );
     }
 
-    const member = repo.create({
+    const [member] = await repo.create([{
       organization_id: organizationId,
       customer_id: customerId,
       role,
       status: "pending",
       invited_by: invitedBy,
       invited_at: new Date(),
-    });
-
-    await repo.persistAndFlush(member);
+    }]);
 
     return successResponse(
       { memberId: member.id, status: "pending" },
@@ -88,10 +98,20 @@ class OrgMemberService extends MedusaService({
     customerId: string,
     action: "accept" | "decline"
   ) {
-    const manager = this.container.resolve("manager") as EntityManager;
+    return await this.respondInvitation_(memberId, customerId, action);
+  }
+
+  @InjectTransactionManager()
+  protected async respondInvitation_(
+    memberId: string,
+    customerId: string,
+    action: "accept" | "decline",
+    @MedusaContext() sharedContext?: Context
+  ) {
+    const manager = sharedContext!.transactionManager as any;
     const repo = manager.getRepository(BizOrgMember);
 
-    const member = await repo.findOne({ where: { id: memberId } });
+    const [member] = await repo.find({ where: { id: memberId } });
     if (!member) {
       throw new BizError(BizErrorCode.BIZ_NOT_FOUND, "邀请记录不存在");
     }
@@ -103,16 +123,19 @@ class OrgMemberService extends MedusaService({
     const newStatus = assertTransition(MEMBER_TRANSITIONS, member.status, action);
 
     if (action === "accept") {
-      member.status = newStatus;
-      member.joined_at = new Date();
+      await repo.update([{
+        entity: member,
+        update: { status: newStatus, joined_at: new Date() },
+      }]);
     } else {
-      member.status = newStatus;
+      await repo.update([{
+        entity: member,
+        update: { status: newStatus },
+      }]);
     }
 
-    await repo.persistAndFlush(member);
-
     return successResponse(
-      { memberId: member.id, status: member.status },
+      { memberId: member.id, status: newStatus },
       action === "accept" ? "已接受邀请" : "已拒绝邀请"
     );
   }
@@ -133,10 +156,18 @@ class OrgMemberService extends MedusaService({
       );
     }
 
-    const manager = this.container.resolve("manager") as EntityManager;
+    return await this.removeMember_(memberId);
+  }
+
+  @InjectTransactionManager()
+  protected async removeMember_(
+    memberId: string,
+    @MedusaContext() sharedContext?: Context
+  ) {
+    const manager = sharedContext!.transactionManager as any;
     const repo = manager.getRepository(BizOrgMember);
 
-    const member = await repo.findOne({ where: { id: memberId } });
+    const [member] = await repo.find({ where: { id: memberId } });
     if (!member) {
       throw new BizError(BizErrorCode.BIZ_NOT_FOUND, "成员不存在");
     }
@@ -149,11 +180,10 @@ class OrgMemberService extends MedusaService({
     }
 
     const newStatus = assertTransition(MEMBER_TRANSITIONS, member.status, "remove");
-    member.status = newStatus;
-    await repo.persistAndFlush(member);
+    await repo.update([{ entity: member, update: { status: newStatus } }]);
 
     return successResponse(
-      { memberId: member.id, status: member.status },
+      { memberId: member.id, status: newStatus },
       "成员已移除"
     );
   }
@@ -170,10 +200,19 @@ class OrgMemberService extends MedusaService({
       );
     }
 
-    const manager = this.container.resolve("manager") as EntityManager;
+    return await this.leaveOrganization_(memberId, actorId);
+  }
+
+  @InjectTransactionManager()
+  protected async leaveOrganization_(
+    memberId: string,
+    actorId: string,
+    @MedusaContext() sharedContext?: Context
+  ) {
+    const manager = sharedContext!.transactionManager as any;
     const repo = manager.getRepository(BizOrgMember);
 
-    const member = await repo.findOne({ where: { id: memberId } });
+    const [member] = await repo.find({ where: { id: memberId } });
     if (!member) {
       throw new BizError(BizErrorCode.BIZ_NOT_FOUND, "成员不存在");
     }
@@ -183,11 +222,10 @@ class OrgMemberService extends MedusaService({
     }
 
     const newStatus = assertTransition(MEMBER_TRANSITIONS, member.status, "leave");
-    member.status = newStatus;
-    await repo.persistAndFlush(member);
+    await repo.update([{ entity: member, update: { status: newStatus } }]);
 
     return successResponse(
-      { memberId: member.id, status: member.status },
+      { memberId: member.id, status: newStatus },
       "已退出机构"
     );
   }
@@ -196,17 +234,22 @@ class OrgMemberService extends MedusaService({
    * 获取成员列表（分页）
    */
   async listMembers(organizationId: string, query: Record<string, any>) {
-    const manager = this.container.resolve("manager") as EntityManager;
+    return await this.listMembers_(organizationId, query);
+  }
+
+  @InjectTransactionManager()
+  protected async listMembers_(
+    organizationId: string,
+    query: Record<string, any>,
+    @MedusaContext() sharedContext?: Context
+  ) {
+    const manager = sharedContext!.transactionManager as any;
     const repo = manager.getRepository(BizOrgMember);
     const { limit, offset } = parsePagination(query);
 
     const [rows, total] = await repo.findAndCount(
-      { organization_id: organizationId },
-      {
-        limit,
-        offset,
-        orderBy: { created_at: "DESC" },
-      }
+      { where: { organization_id: organizationId } },
+      { limit, offset, orderBy: { created_at: "DESC" } }
     );
 
     return successResponse(paginatedResponse(rows, total, { limit, offset }), "查询成功");
@@ -216,18 +259,26 @@ class OrgMemberService extends MedusaService({
    * 获取当前用户的机构成员信息
    */
   async getMemberByCustomerId(customerId: string) {
-    const manager = this.container.resolve("manager") as EntityManager;
+    return await this.getMemberByCustomerId_(customerId);
+  }
+
+  @InjectTransactionManager()
+  protected async getMemberByCustomerId_(
+    customerId: string,
+    @MedusaContext() sharedContext?: Context
+  ) {
+    const manager = sharedContext!.transactionManager as any;
     const repo = manager.getRepository(BizOrgMember);
 
-    const member = await repo.findOne({
+    const members = await repo.find({
       where: { customer_id: customerId, status: "active" },
     });
 
-    if (!member) {
+    if (members.length === 0) {
       throw new BizError(BizErrorCode.BIZ_NOT_FOUND, "未找到机构成员记录");
     }
 
-    return successResponse(member, "查询成功");
+    return successResponse(members[0], "查询成功");
   }
 }
 

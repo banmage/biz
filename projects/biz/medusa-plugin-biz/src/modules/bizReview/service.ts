@@ -1,5 +1,9 @@
-import { MedusaService } from "@medusajs/framework/utils";
-import { EntityManager } from "@mikro-orm/postgresql";
+import {
+  MedusaService,
+  InjectTransactionManager,
+  MedusaContext,
+} from "@medusajs/framework/utils";
+import { Context } from "@medusajs/framework/types";
 import { BizProductReview } from "./models/product-review";
 import { BizError, BizErrorCode } from "../../lib/biz-error-codes";
 import { assertTransition, TransitionMap } from "../../lib/state-machine";
@@ -17,13 +21,6 @@ const REVIEW_TRANSITIONS: TransitionMap = {
 class ReviewService extends MedusaService({
   ProductReview: BizProductReview,
 }) {
-  protected container: any;
-
-  constructor(container: any) {
-    super(container);
-    this.container = container;
-  }
-
   /**
    * 发表评论
    * content.length >= 10，四维评分 1-5
@@ -38,6 +35,22 @@ class ReviewService extends MedusaService({
       complexity: number;
       novelty: number;
     }
+  ) {
+    return await this.createReview_(productId, customerId, content, scores);
+  }
+
+  @InjectTransactionManager()
+  protected async createReview_(
+    productId: string,
+    customerId: string,
+    content: string,
+    scores: {
+      overall: number;
+      innovation: number;
+      complexity: number;
+      novelty: number;
+    },
+    @MedusaContext() sharedContext?: Context
   ) {
     // 内容长度校验
     if (!content || content.trim().length < 10) {
@@ -63,10 +76,10 @@ class ReviewService extends MedusaService({
       }
     }
 
-    const manager = this.container.resolve("manager") as EntityManager;
+    const manager = sharedContext!.transactionManager as any;
     const repo = manager.getRepository(BizProductReview);
 
-    const review = repo.create({
+    const [review] = await repo.create([{
       product_id: productId,
       customer_id: customerId,
       content: content.trim(),
@@ -75,9 +88,7 @@ class ReviewService extends MedusaService({
       complexity_score: scores.complexity,
       novelty_score: scores.novelty,
       status: "pending",
-    });
-
-    await repo.persistAndFlush(review);
+    }]);
 
     return successResponse(
       { reviewId: review.id, status: review.status },
@@ -97,20 +108,34 @@ class ReviewService extends MedusaService({
     action: "approve" | "hide" | "unhide" | "delete",
     reviewerUserId: string
   ) {
-    const manager = this.container.resolve("manager") as EntityManager;
+    return await this.moderateReview_(reviewId, action, reviewerUserId);
+  }
+
+  @InjectTransactionManager()
+  protected async moderateReview_(
+    reviewId: string,
+    action: "approve" | "hide" | "unhide" | "delete",
+    reviewerUserId: string,
+    @MedusaContext() sharedContext?: Context
+  ) {
+    const manager = sharedContext!.transactionManager as any;
     const repo = manager.getRepository(BizProductReview);
 
-    const review = await repo.findOne({ where: { id: reviewId } });
+    const [review] = await repo.find({ where: { id: reviewId } });
     if (!review) {
       throw new BizError(BizErrorCode.BIZ_NOT_FOUND, "评论不存在");
     }
 
     if (action === "delete") {
       // delete 不需要状态机断言，直接设置终态
-      review.status = "deleted";
-      review.reviewed_by = reviewerUserId;
-      review.reviewed_at = new Date();
-      await repo.persistAndFlush(review);
+      await repo.update([{
+        entity: review,
+        update: {
+          status: "deleted",
+          reviewed_by: reviewerUserId,
+          reviewed_at: new Date(),
+        },
+      }]);
 
       return successResponse(
         { reviewId: review.id, status: "deleted" },
@@ -119,10 +144,14 @@ class ReviewService extends MedusaService({
     }
 
     const newStatus = assertTransition(REVIEW_TRANSITIONS, review.status, action);
-    review.status = newStatus;
-    review.reviewed_by = reviewerUserId;
-    review.reviewed_at = new Date();
-    await repo.persistAndFlush(review);
+    await repo.update([{
+      entity: review,
+      update: {
+        status: newStatus,
+        reviewed_by: reviewerUserId,
+        reviewed_at: new Date(),
+      },
+    }]);
 
     const actionMap: Record<string, string> = {
       approve: "评论已通过",
@@ -140,17 +169,22 @@ class ReviewService extends MedusaService({
    * 获取已发布评论列表
    */
   async listPublishedReviews(productId: string, query: Record<string, any>) {
-    const manager = this.container.resolve("manager") as EntityManager;
+    return await this.listPublishedReviews_(productId, query);
+  }
+
+  @InjectTransactionManager()
+  protected async listPublishedReviews_(
+    productId: string,
+    query: Record<string, any>,
+    @MedusaContext() sharedContext?: Context
+  ) {
+    const manager = sharedContext!.transactionManager as any;
     const repo = manager.getRepository(BizProductReview);
     const { limit, offset } = parsePagination(query);
 
     const [rows, total] = await repo.findAndCount(
-      { product_id: productId, status: "published" },
-      {
-        limit,
-        offset,
-        orderBy: { created_at: "DESC" },
-      }
+      { where: { product_id: productId, status: "published" } },
+      { limit, offset, orderBy: { created_at: "DESC" } }
     );
 
     return successResponse(paginatedResponse(rows, total, { limit, offset }), "查询成功");
@@ -160,17 +194,21 @@ class ReviewService extends MedusaService({
    * 获取评论列表（管理端，分页）
    */
   async listAllReviews(query: Record<string, any>) {
-    const manager = this.container.resolve("manager") as EntityManager;
+    return await this.listAllReviews_(query);
+  }
+
+  @InjectTransactionManager()
+  protected async listAllReviews_(
+    query: Record<string, any>,
+    @MedusaContext() sharedContext?: Context
+  ) {
+    const manager = sharedContext!.transactionManager as any;
     const repo = manager.getRepository(BizProductReview);
     const { limit, offset } = parsePagination(query);
     const status = query.status as string | undefined;
 
     const where = status ? { status } : {};
-    const [rows, total] = await repo.findAndCount(where, {
-      limit,
-      offset,
-      orderBy: { created_at: "DESC" },
-    });
+    const [rows, total] = await repo.findAndCount({ where }, { limit, offset, orderBy: { created_at: "DESC" } });
 
     return successResponse(paginatedResponse(rows, total, { limit, offset }), "查询成功");
   }

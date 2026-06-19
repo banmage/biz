@@ -1,4 +1,4 @@
-import { model } from "@medusajs/framework/utils";
+import { model } from "@medusajs/framework/utils"
 
 export const BizOrganization = model.define("biz_organization", {
   id: model.id().primaryKey(),
@@ -10,4 +10,4 @@ export const BizOrganization = model.define("biz_organization", {
   contact_phone: model.text(),
   contact_email: model.text().nullable(),
   license_file_id: model.text().nullable(),
-});
+})

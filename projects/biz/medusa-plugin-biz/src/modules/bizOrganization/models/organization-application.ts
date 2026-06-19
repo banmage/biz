@@ -1,4 +1,4 @@
-import { model } from "@medusajs/framework/utils";
+import { model } from "@medusajs/framework/utils"
 
 export const BizOrganizationApplication = model.define("biz_organization_application", {
   id: model.id().primaryKey(),
@@ -13,5 +13,5 @@ export const BizOrganizationApplication = model.define("biz_organization_applica
   status: model.enum(["pending", "approved", "rejected"]).default("pending"),
   reject_reason: model.text().nullable(),
   reviewed_by: model.text().nullable(),
-  reviewed_at: model.timestamp().nullable(),
-});
+  reviewed_at: model.dateTime().nullable(),
+})
