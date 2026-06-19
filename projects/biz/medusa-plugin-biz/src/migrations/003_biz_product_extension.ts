@@ -46,6 +46,6 @@ export default class extends Migration {
   }
 
   async down(): Promise<void> {
-    // Production does not support rollback of this migration.
+    // 生产环境不支持回滚，仅用于本地开发快速重置
   }
 }
