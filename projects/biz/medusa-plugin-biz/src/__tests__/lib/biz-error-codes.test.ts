@@ -3,7 +3,7 @@ import {
   DEFAULT_ERROR_MESSAGES,
   ERROR_HTTP_STATUS_MAP,
   BizError,
-} from "../lib/biz-error-codes"
+} from "../../lib/biz-error-codes"
 
 describe("BizErrorCode", () => {
   it("should have all 13 error codes", () => {

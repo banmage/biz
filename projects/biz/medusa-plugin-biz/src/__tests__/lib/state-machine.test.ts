@@ -1,5 +1,5 @@
-import { assertTransition, canTransition } from "../lib/state-machine"
-import { BizError, BizErrorCode } from "../lib/biz-error-codes"
+import { assertTransition, canTransition } from "../../lib/state-machine"
+import { BizError, BizErrorCode } from "../../lib/biz-error-codes"
 
 const ORG_TRANSITIONS: Record<string, Record<string, string>> = {
   active: { suspend: "suspended", ban: "banned" },

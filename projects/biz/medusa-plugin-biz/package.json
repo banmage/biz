@@ -17,9 +17,9 @@
     }
   },
   "peerDependencies": {
-    "@medusajs/medusa": ">=2.15.5 <3.0.0",
     "@medusajs/admin-sdk": ">=2.0.0 <3.0.0",
-    "@medusajs/admin-shared": ">=2.0.0 <3.0.0"
+    "@medusajs/admin-shared": ">=2.0.0 <3.0.0",
+    "@medusajs/medusa": ">=2.15.5 <3.0.0"
   },
   "dependencies": {
     "zod": "^4.2.0"
@@ -29,5 +29,12 @@
     "watch": "tsc --watch",
     "test": "jest",
     "lint": "eslint src/"
+  },
+  "devDependencies": {
+    "@medusajs/framework": "^2.16.0",
+    "@types/jest": "^30.0.0",
+    "jest": "^30.4.2",
+    "ts-jest": "^29.4.11",
+    "typescript": "^5.9.3"
   }
 }
