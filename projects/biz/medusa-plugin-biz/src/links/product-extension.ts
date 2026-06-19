@@ -10,5 +10,5 @@ import BizProductExtensionModule from "../modules/bizProductExtension";
 
 export default defineLink(
   ProductModule.linkable.product,
-  BizProductExtensionModule.linkable.productExtension
+  (BizProductExtensionModule as any).linkable.productExtension
 );

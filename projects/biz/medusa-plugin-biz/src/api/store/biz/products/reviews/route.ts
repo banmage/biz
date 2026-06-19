@@ -1,11 +1,12 @@
 import { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
+import { CreateReviewBody } from "@types";
 
 /**
  * POST /store/biz/products/:id/reviews
  * 发表评论
  * 权限：登录 Customer
  */
-export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
+export const POST = async (req: MedusaRequest<CreateReviewBody>, res: MedusaResponse) => {
   try {
     const service = req.scope.resolve("reviewService") as any;
     const customerId = req.actor?.id || "";

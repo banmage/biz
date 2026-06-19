@@ -1,5 +1,6 @@
 import { Request, Response } from "express";
 import { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
+import { ReviewApplicationBody } from "@types";
 
 /**
  * GET /admin/biz/organization-applications
@@ -7,7 +8,7 @@ import { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
  */
 export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
   try {
-    const service = req.scope.resolve("organizationService");
+    const service = req.scope.resolve("organizationService") as any;
     const result = await service.listApplications(req.query);
     res.json(result);
   } catch (err: any) {
@@ -20,7 +21,7 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
  * POST /admin/biz/organization-applications/:id/review
  * 审核入驻申请（approve/reject）
  */
-export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
+export const POST = async (req: MedusaRequest<ReviewApplicationBody>, res: MedusaResponse) => {
   try {
     const service = req.scope.resolve("organizationService") as any;
     const { action, reject_reason } = req.body;

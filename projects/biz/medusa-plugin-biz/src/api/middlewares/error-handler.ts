@@ -3,7 +3,7 @@
  */
 import { NextFunction, Request, Response } from 'express';
 import { ZodError } from 'zod';
-import { BizError, BizErrorCode } from '../lib/biz-error-codes';
+import { BizError, BizErrorCode } from '../../lib/biz-error-codes';
 
 /**
  * 全局错误捕获中间件
@@ -31,7 +31,7 @@ export const errorHandler = (
       success: false,
       error: {
         code: BizErrorCode.BIZ_VALIDATION_ERROR,
-        message: err.errors.map((e) => `${e.path.join('.')}: ${e.message}`).join('; '),
+        message: err.issues.map((e: ZodError['issues'][0]) => `${e.path.join('.')}: ${e.message}`).join('; '),
       },
     });
     return;

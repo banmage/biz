@@ -1,5 +1,6 @@
 import { Request, Response } from "express";
 import { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
+import { UpdateOrgStatusBody } from "@types";
 
 /**
  * GET /admin/biz/organizations
@@ -20,7 +21,7 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
  * POST /admin/biz/organizations/:id/status
  * 变更机构状态（suspend/ban/activate）
  */
-export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
+export const POST = async (req: MedusaRequest<UpdateOrgStatusBody>, res: MedusaResponse) => {
   try {
     const service = req.scope.resolve("organizationService") as any;
     const { event } = req.body;

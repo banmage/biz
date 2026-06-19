@@ -19,7 +19,8 @@
     "baseUrl": ".",
     "paths": {
       "@lib/*": ["src/lib/*"],
-      "@modules/*": ["src/modules/*"]
+      "@modules/*": ["src/modules/*"],
+      "@types": ["src/types"]
     }
   },
   "include": ["src/**/*.ts", "src/**/*.tsx"],

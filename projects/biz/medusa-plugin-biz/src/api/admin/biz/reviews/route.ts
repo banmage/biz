@@ -1,4 +1,5 @@
 import { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
+import { ModerateReviewBody } from "@types";
 
 /**
  * GET /admin/biz/reviews
@@ -19,7 +20,7 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
  * POST /admin/biz/reviews/:id/moderate
  * 评论审核（approve/hide/unhide/delete）
  */
-export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
+export const POST = async (req: MedusaRequest<ModerateReviewBody>, res: MedusaResponse) => {
   try {
     const service = req.scope.resolve("reviewService") as any;
     const { action } = req.body;

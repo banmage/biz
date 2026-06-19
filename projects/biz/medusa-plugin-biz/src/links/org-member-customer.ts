@@ -10,5 +10,5 @@ import BizOrgMemberModule from "../modules/bizOrgMember";
 
 export default defineLink(
   CustomerModule.linkable.customer,
-  BizOrgMemberModule.linkable.orgMember
+  (BizOrgMemberModule as any).linkable.orgMember
 );

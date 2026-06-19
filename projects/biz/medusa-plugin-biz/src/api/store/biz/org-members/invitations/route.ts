@@ -1,11 +1,12 @@
 import { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
+import { InviteMemberBody } from "@types";
 
 /**
  * POST /store/biz/org-members/invitations
  * 邀请成员
  * 权限：creator（机构角色）
  */
-export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
+export const POST = async (req: MedusaRequest<InviteMemberBody>, res: MedusaResponse) => {
   try {
     const service = req.scope.resolve("orgMemberService") as any;
     const { email, role } = req.body;

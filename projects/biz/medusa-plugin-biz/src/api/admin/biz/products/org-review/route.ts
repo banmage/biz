@@ -1,11 +1,12 @@
 import { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
+import { OrgReviewBody } from "@types";
 
 /**
  * POST /admin/biz/products/:id/org-review
  * 机构内审（approve/reject）
  * 权限：approver（机构角色）
  */
-export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
+export const POST = async (req: MedusaRequest<OrgReviewBody>, res: MedusaResponse) => {
   try {
     const service = req.scope.resolve("productExtensionService") as any;
     const { action, reject_reason, scores } = req.body;
