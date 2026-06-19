@@ -12,6 +12,66 @@ import { successResponse } from "../../lib/response";
 import { parsePagination, paginatedResponse } from "../../lib/pagination";
 import { Actor } from "../../types";
 
+/** afterCommit 回调：写审计日志 + 发通知（事务外执行） */
+async function afterCommitAuditAndNotify(params: {
+  container: any;
+  actorType: "user" | "customer";
+  actorId: string;
+  action: string;
+  targetType: string;
+  targetId: string;
+  result: "success" | "failure";
+  details?: any;
+  notification?: {
+    recipientType: "user" | "customer";
+    recipientId: string;
+    type: string;
+    title: string;
+    content: string;
+    relatedEntityType?: string;
+    relatedEntityId?: string;
+  };
+}) {
+  const { container, notification } = params;
+  const logger = container.resolve("logger");
+
+  try {
+    const auditLogService = container.resolve("auditLogService");
+    if (auditLogService) {
+      await auditLogService.writeAuditLog({
+        actorType: params.actorType,
+        actorId: params.actorId,
+        action: params.action,
+        targetType: params.targetType,
+        targetId: params.targetId,
+        result: params.result,
+        details: params.details || null,
+      });
+    }
+  } catch (e) {
+    logger.error("Audit log write failed in afterCommit", e);
+  }
+
+  if (notification) {
+    try {
+      const notificationService = container.resolve("notificationService");
+      if (notificationService) {
+        await notificationService.createNotification({
+          recipientType: notification.recipientType,
+          recipientId: notification.recipientId,
+          type: notification.type,
+          title: notification.title,
+          content: notification.content,
+          relatedEntityType: notification.relatedEntityType,
+          relatedEntityId: notification.relatedEntityId,
+        });
+      }
+    } catch (e) {
+      logger.error("Notification create failed in afterCommit", e);
+    }
+  }
+}
+
 // 机构状态机
 const ORG_TRANSITIONS: TransitionMap = {
   active: { suspend: "suspended", ban: "banned" },
@@ -31,6 +91,7 @@ class OrganizationService extends MedusaService({
   /**
    * 提交入驻申请
    * 幂等规则：同一 applicant_id 存在 pending 申请时返回 409
+   * afterCommit：审计日志 + 通知
    */
   async submitApplication(
     data: {
@@ -43,9 +104,10 @@ class OrganizationService extends MedusaService({
       contactPhone: string;
       contactEmail?: string;
     },
-    actor: Actor
+    actor: Actor,
+    container?: any
   ) {
-    return await this.submitApplication_(data);
+    return await this.submitApplication_(data, actor, container || (this as any).container);
   }
 
   @InjectTransactionManager()
@@ -60,6 +122,8 @@ class OrganizationService extends MedusaService({
       contactPhone: string;
       contactEmail?: string;
     },
+    actor: Actor,
+    resolvedContainer: any,
     @MedusaContext() sharedContext?: Context
   ) {
     const manager = sharedContext!.transactionManager as any;
@@ -99,6 +163,33 @@ class OrganizationService extends MedusaService({
       },
     ]);
 
+    // afterCommit：审计日志 + 通知
+    setImmediate(() => {
+      afterCommitAuditAndNotify({
+        container: resolvedContainer,
+        actorType: actor.type,
+        actorId: actor.id,
+        action: "organization_application.submit",
+        targetType: "organization_application",
+        targetId: application.id,
+        result: "success",
+        details: {
+          applicantId: data.applicantId,
+          name: data.name,
+          type: data.type,
+        },
+        notification: {
+          recipientType: actor.type,
+          recipientId: actor.id,
+          type: "application_submitted",
+          title: "入驻申请已提交",
+          content: `您的入驻申请「${data.name}」已提交，请等待平台审核`,
+          relatedEntityType: "organization_application",
+          relatedEntityId: application.id,
+        },
+      });
+    });
+
     return successResponse(
       { applicationId: application.id, status: application.status },
       "申请提交成功，请等待审核"
@@ -107,16 +198,18 @@ class OrganizationService extends MedusaService({
 
   /**
    * 审核入驻申请
-   * approve: pending → approved，创建 Organization
+   * approve: pending → approved，创建 Organization + OrgMember(creator)
    * reject: pending → rejected
+   * afterCommit：审计日志 + 通知
    */
   async reviewApplication(
     applicationId: string,
     action: "approve" | "reject",
     reviewerUserId: string,
-    rejectReason?: string
+    rejectReason?: string,
+    container?: any
   ) {
-    return await this.reviewApplication_(applicationId, action, reviewerUserId, rejectReason);
+    return await this.reviewApplication_(applicationId, action, reviewerUserId, rejectReason, container || (this as any).container);
   }
 
   @InjectTransactionManager()
@@ -125,6 +218,7 @@ class OrganizationService extends MedusaService({
     action: "approve" | "reject",
     reviewerUserId: string,
     rejectReason?: string,
+    resolvedContainer?: any,
     @MedusaContext() sharedContext?: Context
   ) {
     const manager = sharedContext!.transactionManager as any;
@@ -165,14 +259,40 @@ class OrganizationService extends MedusaService({
         },
       ]);
 
-      return successResponse(
-        {
-          applicationId: application.id,
-          status: "approved",
-          organizationId: organization.id,
-        },
-        "入驻申请已通过"
-      );
+      const responseData = {
+        applicationId: application.id,
+        status: "approved",
+        organizationId: organization.id,
+      };
+
+      // afterCommit：审计日志 + 通知
+      setImmediate(() => {
+        afterCommitAuditAndNotify({
+          container: resolvedContainer,
+          actorType: "user",
+          actorId: reviewerUserId,
+          action: "organization_application.approve",
+          targetType: "organization_application",
+          targetId: application.id,
+          result: "success",
+          details: {
+            organizationId: organization.id,
+            applicantId: application.applicant_id,
+            name: application.name,
+          },
+          notification: {
+            recipientType: "customer",
+            recipientId: application.applicant_id,
+            type: "application_approved",
+            title: "入驻申请已通过",
+            content: `恭喜！您的入驻申请「${application.name}」已通过审核，机构已创建`,
+            relatedEntityType: "organization",
+            relatedEntityId: organization.id,
+          },
+        });
+      });
+
+      return successResponse(responseData, "入驻申请已通过");
     } else {
       // reject
       if (!rejectReason || rejectReason.trim().length === 0) {
@@ -193,10 +313,36 @@ class OrganizationService extends MedusaService({
         },
       ]);
 
-      return successResponse(
-        { applicationId: application.id, status: "rejected" },
-        "申请已驳回"
-      );
+      const responseData = { applicationId: application.id, status: "rejected" };
+
+      // afterCommit：审计日志 + 通知
+      setImmediate(() => {
+        afterCommitAuditAndNotify({
+          container: resolvedContainer,
+          actorType: "user",
+          actorId: reviewerUserId,
+          action: "organization_application.reject",
+          targetType: "organization_application",
+          targetId: application.id,
+          result: "success",
+          details: {
+            applicantId: application.applicant_id,
+            name: application.name,
+            rejectReason,
+          },
+          notification: {
+            recipientType: "customer",
+            recipientId: application.applicant_id,
+            type: "application_rejected",
+            title: "入驻申请被驳回",
+            content: `您的入驻申请「${application.name}」被驳回，原因：${rejectReason}`,
+            relatedEntityType: "organization_application",
+            relatedEntityId: application.id,
+          },
+        });
+      });
+
+      return successResponse(responseData, "申请已驳回");
     }
   }
 

@@ -7,7 +7,7 @@ import { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
  */
 export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
   try {
-    const service = req.scope.resolve("productExtensionService");
+    const service = req.scope.resolve("productExtensionService") as any;
     const actor = {
       type: "customer" as const,
       id: req.actor?.id || "",
@@ -16,7 +16,7 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
       platformRole: undefined,
     };
 
-    const result = await service.createProductWithExtension(req.body, actor);
+    const result = await service.createProductWithExtension(req.body, actor, req.scope);
     res.status(201).json(result);
   } catch (err: any) {
     const status = err.httpStatus || 500;

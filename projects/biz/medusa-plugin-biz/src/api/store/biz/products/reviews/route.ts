@@ -7,7 +7,7 @@ import { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
  */
 export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
   try {
-    const service = req.scope.resolve("reviewService");
+    const service = req.scope.resolve("reviewService") as any;
     const customerId = req.actor?.id || "";
     const { content, scores } = req.body;
 
@@ -31,7 +31,7 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
  */
 export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
   try {
-    const service = req.scope.resolve("reviewService");
+    const service = req.scope.resolve("reviewService") as any;
     const result = await service.listPublishedReviews(req.params.id, req.query);
     res.json(result);
   } catch (err: any) {

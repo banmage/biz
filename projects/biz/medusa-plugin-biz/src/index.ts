@@ -18,6 +18,7 @@ import bizProductExtension from "./modules/bizProductExtension";
 import bizReview from "./modules/bizReview";
 import bizNotification from "./modules/bizNotification";
 import bizAuditLog from "./modules/bizAuditLog";
+import subscribers from "./subscribers";
 
 export const config: any = {
   name: "@your-org/medusa-plugin-biz",
@@ -30,4 +31,5 @@ export const config: any = {
     bizNotification,
     bizAuditLog,
   ],
+  subscribers: subscribers,
 };

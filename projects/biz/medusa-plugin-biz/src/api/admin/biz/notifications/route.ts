@@ -6,9 +6,9 @@ import { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
  */
 export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
   try {
-    const service = req.scope.resolve("notificationService");
+    const service = req.scope.resolve("notificationService") as any;
     // 管理员查看所有 user 类型的通知
-    const result = await service.listNotifications("user", req.actor?.id || "", req.query);
+    const result = await service.queryNotifications("user", req.actor?.id || "", req.query);
     res.json(result);
   } catch (err: any) {
     const status = err.httpStatus || 500;

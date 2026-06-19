@@ -7,7 +7,7 @@ import { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
  */
 export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
   try {
-    const service = req.scope.resolve("productExtensionService");
+    const service = req.scope.resolve("productExtensionService") as any;
     const { action, reject_reason, scores } = req.body;
     const actor = {
       type: "customer" as const,
@@ -22,7 +22,8 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
       action,
       actor,
       scores,
-      reject_reason
+      reject_reason,
+      req.scope
     );
     res.json(result);
   } catch (err: any) {

@@ -22,7 +22,7 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
  */
 export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
   try {
-    const service = req.scope.resolve("organizationService");
+    const service = req.scope.resolve("organizationService") as any;
     const { action, reject_reason } = req.body;
     const reviewerId = req.actor?.id;
 
@@ -34,7 +34,8 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
       req.params.id,
       action,
       reviewerId,
-      reject_reason
+      reject_reason,
+      req.scope
     );
     res.json(result);
   } catch (err: any) {

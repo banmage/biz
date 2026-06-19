@@ -7,7 +7,7 @@ import { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
  */
 export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
   try {
-    const service = req.scope.resolve("organizationService");
+    const service = req.scope.resolve("organizationService") as any;
     const result = await service.listOrganizations(req.query);
     res.json(result);
   } catch (err: any) {
@@ -22,7 +22,7 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
  */
 export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
   try {
-    const service = req.scope.resolve("organizationService");
+    const service = req.scope.resolve("organizationService") as any;
     const { event } = req.body;
     const actorRole = req.actor?.platformRole;
 

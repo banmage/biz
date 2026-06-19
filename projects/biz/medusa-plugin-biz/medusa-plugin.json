@@ -1,6 +1,6 @@
 {
   "name": "@your-org/medusa-plugin-biz",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "description": "Medusa Biz 定制平台业务插件",
   "license": "UNLICENSED"
 }

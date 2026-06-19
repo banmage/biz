@@ -6,7 +6,7 @@ import { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
  */
 export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
   try {
-    const service = req.scope.resolve("productExtensionService");
+    const service = req.scope.resolve("productExtensionService") as any;
     const result = await service.listProducts(req.query);
     res.json(result);
   } catch (err: any) {

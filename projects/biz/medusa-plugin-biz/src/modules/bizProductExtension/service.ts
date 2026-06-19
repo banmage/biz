@@ -12,6 +12,68 @@ import { successResponse } from "../../lib/response";
 import { parsePagination, paginatedResponse } from "../../lib/pagination";
 import { Actor } from "../../types";
 
+/** afterCommit 回调：写审计日志 + 发通知（事务外执行） */
+async function afterCommitAuditAndNotify(params: {
+  container: any;
+  actorType: "user" | "customer";
+  actorId: string;
+  action: string;
+  targetType: string;
+  targetId: string;
+  result: "success" | "failure";
+  details?: any;
+  notification?: {
+    recipientType: "user" | "customer";
+    recipientId: string;
+    type: string;
+    title: string;
+    content: string;
+    relatedEntityType?: string;
+    relatedEntityId?: string;
+  };
+}) {
+  const { container, notification } = params;
+  const logger = container.resolve("logger");
+
+  // 1. 写审计日志（独立事务，失败仅 log）
+  try {
+    const auditLogService = container.resolve("auditLogService");
+    if (auditLogService) {
+      await auditLogService.writeAuditLog({
+        actorType: params.actorType,
+        actorId: params.actorId,
+        action: params.action,
+        targetType: params.targetType,
+        targetId: params.targetId,
+        result: params.result,
+        details: params.details || null,
+      });
+    }
+  } catch (e) {
+    logger.error("Audit log write failed in afterCommit", e);
+  }
+
+  // 2. 发通知（独立事务，失败仅 log）
+  if (notification) {
+    try {
+      const notificationService = container.resolve("notificationService");
+      if (notificationService) {
+        await notificationService.createNotification({
+          recipientType: notification.recipientType,
+          recipientId: notification.recipientId,
+          type: notification.type,
+          title: notification.title,
+          content: notification.content,
+          relatedEntityType: notification.relatedEntityType,
+          relatedEntityId: notification.relatedEntityId,
+        });
+      }
+    } catch (e) {
+      logger.error("Notification create failed in afterCommit", e);
+    }
+  }
+}
+
 // 产品审核状态机
 const REVIEW_TRANSITIONS: TransitionMap = {
   draft: { submit_org_review: "org_pending" },
@@ -24,9 +86,14 @@ class ProductExtensionService extends MedusaService({
   ProductExtension: BizProductExtension,
   ProductReviewLog: BizProductReviewLog,
 }) {
+  private getContainer(container?: any): any {
+    return container || (this as any).container;
+  }
+
   /**
    * 创建产品（唯一入口）
    * 同一事务中：调用核心 createProductsWorkflow + 创建 ProductExtension
+   * afterCommit：写审计日志 + 发通知
    */
   async createProductWithExtension(
     payload: {
@@ -37,7 +104,8 @@ class ProductExtensionService extends MedusaService({
       status?: string;
       tags?: string[];
     },
-    actor: Actor
+    actor: Actor,
+    container?: any
   ) {
     if (!actor.orgId) {
       throw new BizError(
@@ -48,9 +116,10 @@ class ProductExtensionService extends MedusaService({
 
     // 标签校验
     const tags = this.validateTags(payload.tags);
+    const resolvedContainer = this.getContainer(container);
 
     // 调用核心 createProductsWorkflow
-    const createProductsWorkflow = (this as any).container.resolve("createProductsWorkflow");
+    const createProductsWorkflow = resolvedContainer.resolve("createProductsWorkflow");
     if (!createProductsWorkflow) {
       throw new BizError(
         BizErrorCode.BIZ_INTERNAL_ERROR,
@@ -73,13 +142,49 @@ class ProductExtensionService extends MedusaService({
           organization_id: actor.orgId,
         },
       },
-      container: (this as any).container,
+      container: resolvedContainer,
     });
 
     const product = products[0];
 
     // 创建 ProductExtension
-    return await this.createProductExtension_(product.id, actor.orgId, tags);
+    const result = await this.createProductExtension_(product.id, actor.orgId, tags);
+
+    // afterCommit：审计日志 + 通知（事务外异步执行，失败不阻塞）
+    setImmediate(() => {
+      afterCommitAuditAndNotify({
+        container: resolvedContainer,
+        actorType: actor.type,
+        actorId: actor.id,
+        action: "product_extension.create",
+        targetType: "product_extension",
+        targetId: result.data.extensionId,
+        result: "success",
+        details: {
+          productId: product.id,
+          organizationId: actor.orgId,
+          title: payload.title,
+        },
+        notification: actor.type === "customer" ? {
+          recipientType: actor.type,
+          recipientId: actor.id,
+          type: "product_created",
+          title: "产品已创建",
+          content: `产品「${payload.title}」已创建成功，当前状态：草稿`,
+          relatedEntityType: "product",
+          relatedEntityId: product.id,
+        } : undefined,
+      });
+    });
+
+    return successResponse(
+      {
+        productId: product.id,
+        extensionId: result.data.extensionId,
+        reviewStatus: result.data.reviewStatus,
+      },
+      "产品创建成功"
+    );
   }
 
   @InjectTransactionManager()
@@ -111,15 +216,17 @@ class ProductExtensionService extends MedusaService({
 
   /**
    * 提交审核 draft → org_pending
+   * SELECT FOR UPDATE 锁定 ProductExtension 行后生成 round
    */
-  async submitForReview(productId: string, actor: Actor) {
-    return await this.submitForReview_(productId, actor);
+  async submitForReview(productId: string, actor: Actor, container?: any) {
+    return await this.submitForReview_(productId, actor, this.getContainer(container));
   }
 
   @InjectTransactionManager()
   protected async submitForReview_(
     productId: string,
     actor: Actor,
+    resolvedContainer: any,
     @MedusaContext() sharedContext?: Context
   ) {
     const manager = sharedContext!.transactionManager as any;
@@ -134,7 +241,10 @@ class ProductExtensionService extends MedusaService({
     // 状态机断言
     assertTransition(REVIEW_TRANSITIONS, extension.review_status, "submit_org_review");
 
-    // 生成 round（COUNT + 1）
+    // SELECT FOR UPDATE 锁定行，防止并发 round 冲突
+    await manager.execute("SELECT 1 FROM biz_product_extension WHERE id = ? FOR UPDATE", [extension.id]);
+
+    // 生成 round（COUNT + 1，在锁保护下）
     const count = await reviewLogRepo.count({
       where: { product_extension_id: extension.id },
     });
@@ -154,19 +264,42 @@ class ProductExtensionService extends MedusaService({
       action: "submit",
     }]);
 
-    return successResponse(
-      {
-        productId,
-        reviewStatus: "org_pending",
-        round,
-      },
-      "提交审核成功"
-    );
+    const responseData = {
+      productId,
+      reviewStatus: "org_pending",
+      round,
+    };
+
+    // afterCommit：审计日志 + 通知
+    setImmediate(() => {
+      afterCommitAuditAndNotify({
+        container: resolvedContainer,
+        actorType: actor.type,
+        actorId: actor.id,
+        action: "product_extension.submit_org_review",
+        targetType: "product_extension",
+        targetId: extension.id,
+        result: "success",
+        details: { productId, round },
+        notification: {
+          recipientType: "customer",
+          recipientId: actor.id,
+          type: "product_submitted",
+          title: "产品已提交审核",
+          content: `产品已提交机构内审，当前轮次：第${round}轮`,
+          relatedEntityType: "product_extension",
+          relatedEntityId: extension.id,
+        },
+      });
+    });
+
+    return successResponse(responseData, "提交审核成功");
   }
 
   /**
    * 机构内审 org_pending → platform_pending / draft
    * 通过时必须填写 3 个机构评分
+   * SELECT FOR UPDATE 锁定行后生成 round
    */
   async orgReview(
     extensionId: string,
@@ -177,9 +310,10 @@ class ProductExtensionService extends MedusaService({
       complexity: number;
       novelty: number;
     },
-    rejectReason?: string
+    rejectReason?: string,
+    container?: any
   ) {
-    return await this.orgReview_(extensionId, action, actor, scores, rejectReason);
+    return await this.orgReview_(extensionId, action, actor, scores, rejectReason, this.getContainer(container));
   }
 
   @InjectTransactionManager()
@@ -193,6 +327,7 @@ class ProductExtensionService extends MedusaService({
       novelty: number;
     },
     rejectReason?: string,
+    resolvedContainer?: any,
     @MedusaContext() sharedContext?: Context
   ) {
     const manager = sharedContext!.transactionManager as any;
@@ -233,6 +368,9 @@ class ProductExtensionService extends MedusaService({
 
     await extensionRepo.update([{ entity: extension, update: updateData }]);
 
+    // SELECT FOR UPDATE 锁定行后生成 round
+    await manager.execute("SELECT 1 FROM biz_product_extension WHERE id = ? FOR UPDATE", [extension.id]);
+
     // 写审核日志
     const count = await reviewLogRepo.count({
       where: { product_extension_id: extension.id },
@@ -248,19 +386,52 @@ class ProductExtensionService extends MedusaService({
       reject_reason: rejectReason || null,
     }]);
 
-    return successResponse(
-      {
-        extensionId: extension.id,
-        reviewStatus: extension.review_status,
-        round,
-      },
-      action === "approve" ? "内审通过" : "内审驳回"
-    );
+    const responseData = {
+      extensionId: extension.id,
+      reviewStatus: extension.review_status,
+      round,
+    };
+
+    // afterCommit：审计日志 + 通知
+    const actionText = action === "approve" ? "内审通过" : "内审驳回";
+    setImmediate(() => {
+      afterCommitAuditAndNotify({
+        container: resolvedContainer,
+        actorType: actor.type,
+        actorId: actor.id,
+        action: `product_extension.${eventName}`,
+        targetType: "product_extension",
+        targetId: extension.id,
+        result: "success",
+        details: {
+          productId: extension.product_id,
+          organizationId: extension.organization_id,
+          action,
+          scores: action === "approve" ? scores : undefined,
+          rejectReason: action === "reject" ? rejectReason : undefined,
+          round,
+        },
+        notification: {
+          recipientType: "customer",
+          recipientId: actor.id,
+          type: action === "approve" ? "product_org_approved" : "product_org_rejected",
+          title: `产品${actionText}`,
+          content: action === "approve"
+            ? `产品已通过机构内审，进入平台审核阶段`
+            : `产品被机构内审驳回，原因：${rejectReason}`,
+          relatedEntityType: "product_extension",
+          relatedEntityId: extension.id,
+        },
+      });
+    });
+
+    return successResponse(responseData, action === "approve" ? "内审通过" : "内审驳回");
   }
 
   /**
    * 平台终审 platform_pending → published / draft
    * 通过时必须填写 3 个平台评分，并调用 updateProductsWorkflow
+   * SELECT FOR UPDATE 锁定行后生成 round
    */
   async platformReview(
     extensionId: string,
@@ -271,9 +442,10 @@ class ProductExtensionService extends MedusaService({
       complexity: number;
       novelty: number;
     },
-    rejectReason?: string
+    rejectReason?: string,
+    container?: any
   ) {
-    return await this.platformReview_(extensionId, action, actor, scores, rejectReason);
+    return await this.platformReview_(extensionId, action, actor, scores, rejectReason, this.getContainer(container));
   }
 
   @InjectTransactionManager()
@@ -287,6 +459,7 @@ class ProductExtensionService extends MedusaService({
       novelty: number;
     },
     rejectReason?: string,
+    resolvedContainer?: any,
     @MedusaContext() sharedContext?: Context
   ) {
     const manager = sharedContext!.transactionManager as any;
@@ -327,17 +500,20 @@ class ProductExtensionService extends MedusaService({
 
     // 如果通过，调用核心 updateProductsWorkflow 发布产品
     if (action === "approve") {
-      const updateProductsWorkflow = (this as any).container.resolve("updateProductsWorkflow");
+      const updateProductsWorkflow = resolvedContainer.resolve("updateProductsWorkflow");
       if (updateProductsWorkflow) {
         await updateProductsWorkflow.run({
           input: {
             selector: { id: [extension.product_id] },
             update: { status: "published" },
           },
-          container: (this as any).container,
+          container: resolvedContainer,
         });
       }
     }
+
+    // SELECT FOR UPDATE 锁定行后生成 round
+    await manager.execute("SELECT 1 FROM biz_product_extension WHERE id = ? FOR UPDATE", [extension.id]);
 
     // 写审核日志
     const count = await reviewLogRepo.count({
@@ -354,14 +530,46 @@ class ProductExtensionService extends MedusaService({
       reject_reason: rejectReason || null,
     }]);
 
-    return successResponse(
-      {
-        extensionId: extension.id,
-        reviewStatus: extension.review_status,
-        round,
-      },
-      action === "approve" ? "终审通过，产品已发布" : "终审驳回"
-    );
+    const responseData = {
+      extensionId: extension.id,
+      reviewStatus: extension.review_status,
+      round,
+    };
+
+    // afterCommit：审计日志 + 通知
+    const actionText = action === "approve" ? "终审通过，产品已发布" : "终审驳回";
+    setImmediate(() => {
+      afterCommitAuditAndNotify({
+        container: resolvedContainer,
+        actorType: actor.type,
+        actorId: actor.id,
+        action: `product_extension.${eventName}`,
+        targetType: "product_extension",
+        targetId: extension.id,
+        result: "success",
+        details: {
+          productId: extension.product_id,
+          organizationId: extension.organization_id,
+          action,
+          scores: action === "approve" ? scores : undefined,
+          rejectReason: action === "reject" ? rejectReason : undefined,
+          round,
+        },
+        notification: {
+          recipientType: "customer",
+          recipientId: extension.organization_id, // 通知机构
+          type: action === "approve" ? "product_published" : "product_platform_rejected",
+          title: `产品${actionText}`,
+          content: action === "approve"
+            ? `产品已通过平台终审并发布`
+            : `产品被平台终审驳回，原因：${rejectReason}`,
+          relatedEntityType: "product_extension",
+          relatedEntityId: extension.id,
+        },
+      });
+    });
+
+    return successResponse(responseData, actionText);
   }
 
   /**
